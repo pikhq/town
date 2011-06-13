@@ -4,7 +4,7 @@ namespace eval build {}
 proc program {name commands} {
     namespace eval ::targets::$name {
 	set type programs
-	set working_dir .
+	set working_dir ..
     }
     proc ::targets::${name}::do {} $commands
 }
@@ -29,7 +29,10 @@ proc uses {args} {
 
 proc c {args} {
     set space [uplevel namespace current]
-    switch [lindex $args 0] {
+    if {[set ${space}::type] != "modules" && ![info exists ${space}::linkwith]} {
+	set ${space}::linkwith c
+    }
+   switch [lindex $args 0] {
 	define {
 	    foreach x [lrange $args 1 end] {
 		lappend ${space}::cppflags -D$x
@@ -46,7 +49,6 @@ proc c {args} {
 	sources {
 	    foreach x [lrange $args 1 end] {
 		lappend ${space}::csources [set ${space}::working_dir]/$x
-		lappend ${space}::objects [regsub {\.c$} $x .o]
 	    }
 	}
     }
@@ -80,16 +82,27 @@ proc system {arg} {
 }
 
 proc main {} {
+    set outfile [open objs/Tupfile w]
     set ::build::do_targets $::build::defaults
     foreach x $::build::do_targets {
 	::targets::${x}::do
     }
-    foreach x $::build::do_targets {
-	foreach y [readvar ::targets::${x}::csources] {
-	    system [concat gcc -c [readvar ::targets::${x}::cflags] [readvar ::targets::${x}::cppflags] $y]
+    ::c::generate $outfile
+    ::c::link $outfile
+    close $outfile
+}
+
+namespace eval c {
+    proc generate {outfile} {
+	foreach x $::build::do_targets {
+	    puts $outfile ": foreach [set ::targets::${x}::csources] |> ^ CC %f^ gcc [readvar ::targets::${x}::cflags] [readvar ::targets::${x}::cppflags] -c %f -o %o|> ${x}_%B.o {${x}-objs}"
 	}
     }
-    foreach x $::build::do_targets {
-	system [concat gcc [readvar ::targets::${x}::cflags] [readvar ::targets::${x}::objects] [readvar ::targets::${x}::libs] -o $x]
+    proc link {outfile} {
+	foreach x $::build::do_targets {
+	    if {[readvar ::targets::${x}::linkwith] == "c"} {
+		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ gcc [readvar ::targets::${x}::cflags] %f [readvar ::targets::${x}::libs] -o %o |> $x"
+	    }
+	}
     }
 }
