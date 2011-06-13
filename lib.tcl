@@ -36,16 +36,20 @@ namespace eval c {
 	}
     }
 
-    proc libs {args} {
-	set space [uplevel namespace current]
-	foreach x [lrange $args 1 end] {
-	    lappend ${space}::libs -l$x
+    namespace eval needs {
+	namespace export c99 libs
+	proc c99 {} {
+	    set space [uplevel namespace current]
+	    lappend ${space}::cflags -std=c99
 	}
-    }
 
-    proc needs {std} {
-	set space [uplevel namespace current]
-	lappend ${space}::cflags -std=$std
+	proc libs {args} {
+	    set space [uplevel namespace current]
+	    foreach x $args {
+		lappend ${space}::libs -l$x
+	    }
+	}
+	namespace ensemble create
     }
 
     proc sources {args} {
@@ -53,7 +57,7 @@ namespace eval c {
 	if {[set ${space}::type] != "modules" && ![info exists ${space}::linkwith]} {
 	    set ${space}::linkwith c
 	}
-	foreach x [lrange $args 1 end] {
+	foreach x $args {
 	    lappend ${space}::csources [set ${space}::working_dir]/$x
 	}
     }
@@ -93,8 +97,8 @@ proc targets {args} {
     }
 }
 proc readvar {v} {
-    if {[info exists $v]} {
-	return [set $v]
+    if {[uplevel info exists $v]} {
+	return [uplevel set $v]
     } else {
 	return ""
     }
