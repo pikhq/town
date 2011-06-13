@@ -1,12 +1,22 @@
-namespace eval targets {}
+namespace eval groups {}
 namespace eval build {}
 
 proc program {name commands} {
-    namespace eval ::targets::$name {
+    lappend ::build::possible_targets $name
+    namespace eval ::groups::$name {
 	set type programs
 	set working_dir ..
     }
-    proc ::targets::${name}::do {} $commands
+    proc ::groups::${name}::do {} $commands
+}
+
+proc module {name commands} {
+    lappend ::build::possible_targets $name
+    namespace eval ::groups::$name {
+	set type module
+	set working_dir ..
+    }
+    proc ::groups::${name}:: do {} $commands
 }
 
 proc in-directory {dir args} {
@@ -23,17 +33,32 @@ proc in-directory {dir args} {
 
 proc uses {args} {
     foreach x $args {
-	uplevel ::targets::${x}::do
+	uplevel ::groups::${x}::do
     }
 }
 
 namespace eval c {
-    namespace export define libs needs sources
+    namespace export define libs test needs sources
     proc define {args} {
 	set space [uplevel namespace current]
 	foreach x $args {
 	    lappend ${space}::cppflags -D$x
 	}
+    }
+
+    namespace eval test {
+	namespace export pkg-config
+	proc pkg-config {x if else} {
+	    puts -nonewline stderr "Testing for $x with pkg-config...   "
+	    if {![catch {exec pkg-config --exists $x}]} {
+		puts yes
+		uplevel $if
+	    } else {
+		puts no
+		uplevel $else
+	    }
+	}
+	namespace ensemble create
     }
 
     namespace eval needs {
@@ -46,7 +71,15 @@ namespace eval c {
 	proc libs {args} {
 	    set space [uplevel namespace current]
 	    foreach x $args {
-		lappend ${space}::libs -l$x
+		if {[info commands ::c::needs::lib_$x] != ""} {
+		    return [uplevel c needs lib_$x]
+		}
+		c test pkg-config $x {
+		    lappend ${space}::libs [exec pkg-config --libs $x]
+		    lappend ${space}::cflags [exec pkg-config --cflags $x]
+		} {
+		    lappend ${space}::libs -l$x
+		}
 	    }
 	}
 	namespace ensemble create
@@ -64,15 +97,15 @@ namespace eval c {
 
     proc generate {outfile} {
 	foreach x $::build::do_targets {
-	    namespace upvar ::targets::${x} csources csources cflags cflags cppflags cppflags
+	    namespace upvar ::groups::${x} csources csources cflags cflags cppflags cppflags
 	    puts $outfile ": foreach $csources |> ^ CC %f^ gcc [readvar cflags] [readvar cppflags]-c %f -o %o|> ${x}_%B.o {${x}-objs}"
 	}
     }
 
     proc link {outfile} {
 	foreach x $::build::do_targets {
-	    if {[readvar ::targets::${x}::linkwith] == "c"} {
-		namespace upvar ::targets::${x} cflags cflags libs libs
+	    if {[readvar ::groups::${x}::linkwith] == "c"} {
+		namespace upvar ::groups::${x} cflags cflags libs libs
 		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ gcc [readvar cflags] %f [readvar libs] -o %o |> $x"
 	    }
 	}
@@ -107,9 +140,13 @@ proc readvar {v} {
 
 proc main {} {
     set outfile [open objs/Tupfile w]
-    set ::build::do_targets $::build::defaults
+    if {[info exists ::build::defaults]} {
+	set ::build::do_targets $::build::defaults
+    } else {
+	set ::build::do_targets $::build::possible_targets
+    }
     foreach x $::build::do_targets {
-	::targets::${x}::do
+	::groups::${x}::do
     }
     ::c::generate $outfile
     ::c::link $outfile
