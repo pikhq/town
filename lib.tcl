@@ -27,32 +27,56 @@ proc uses {args} {
     }
 }
 
-proc c {args} {
-    set space [uplevel namespace current]
-    if {[set ${space}::type] != "modules" && ![info exists ${space}::linkwith]} {
-	set ${space}::linkwith c
-    }
-   switch [lindex $args 0] {
-	define {
-	    foreach x [lrange $args 1 end] {
-		lappend ${space}::cppflags -D$x
-	    }
-	}
-	libs {
-	    foreach x [lrange $args 1 end] {
-		lappend ${space}::libs -l$x
-	    }
-	}
-	needs {
-	    lappend ${space}::cflags -std=[lindex $args 1]
-	}
-	sources {
-	    foreach x [lrange $args 1 end] {
-		lappend ${space}::csources [set ${space}::working_dir]/$x
-	    }
+namespace eval c {
+    namespace export define libs needs sources
+    proc define {args} {
+	set space [uplevel namespace current]
+	foreach x $args {
+	    lappend ${space}::cppflags -D$x
 	}
     }
+
+    proc libs {args} {
+	set space [uplevel namespace current]
+	foreach x [lrange $args 1 end] {
+	    lappend ${space}::libs -l$x
+	}
+    }
+
+    proc needs {std} {
+	set space [uplevel namespace current]
+	lappend ${space}::cflags -std=$std
+    }
+
+    proc sources {args} {
+	set space [uplevel namespace current]
+	if {[set ${space}::type] != "modules" && ![info exists ${space}::linkwith]} {
+	    set ${space}::linkwith c
+	}
+	foreach x [lrange $args 1 end] {
+	    lappend ${space}::csources [set ${space}::working_dir]/$x
+	}
+    }
+
+    proc generate {outfile} {
+	foreach x $::build::do_targets {
+	    namespace upvar ::targets::${x} csources csources cflags cflags cppflags cppflags
+	    puts $outfile ": foreach $csources |> ^ CC %f^ gcc [readvar cflags] [readvar cppflags]-c %f -o %o|> ${x}_%B.o {${x}-objs}"
+	}
+    }
+
+    proc link {outfile} {
+	foreach x $::build::do_targets {
+	    if {[readvar ::targets::${x}::linkwith] == "c"} {
+		namespace upvar ::targets::${x} cflags cflags libs libs
+		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ gcc [readvar cflags] %f [readvar libs] -o %o |> $x"
+	    }
+	}
+    }
+
+    namespace ensemble create
 }
+
 
 proc targets {args} {
     switch [lindex $args 0] {
@@ -93,16 +117,4 @@ proc main {} {
 }
 
 namespace eval c {
-    proc generate {outfile} {
-	foreach x $::build::do_targets {
-	    puts $outfile ": foreach [set ::targets::${x}::csources] |> ^ CC %f^ gcc [readvar ::targets::${x}::cflags] [readvar ::targets::${x}::cppflags] -c %f -o %o|> ${x}_%B.o {${x}-objs}"
-	}
-    }
-    proc link {outfile} {
-	foreach x $::build::do_targets {
-	    if {[readvar ::targets::${x}::linkwith] == "c"} {
-		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ gcc [readvar ::targets::${x}::cflags] %f [readvar ::targets::${x}::libs] -o %o |> $x"
-	    }
-	}
-    }
 }
