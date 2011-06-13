@@ -81,32 +81,28 @@ namespace eval c {
     namespace ensemble create
 }
 
-
-proc targets {args} {
-    switch [lindex $args 0] {
-	are {
-	    foreach x [lrange $args 1 end] {
-		lappend ::build::targets $x
-	    }
-	}
-	default {
-	    foreach x [lrange $args 1 end] {
-		lappend ::build::defaults $x
-	    }
+namespace eval targets {
+    namespace export are default
+    proc are {args} {
+	foreach x $args {
+	    lappend ::build::targets $x
 	}
     }
+
+    proc default {args} {
+	foreach x $args {
+	    lappend ::build::defaults $x
+	}
+    }
+    namespace ensemble create
 }
+
 proc readvar {v} {
     if {[uplevel info exists $v]} {
 	return [uplevel set $v]
     } else {
 	return ""
     }
-}
-
-proc system {arg} {
-    puts $arg
-    exec sh -c $arg
 }
 
 proc main {} {
@@ -118,7 +114,4 @@ proc main {} {
     ::c::generate $outfile
     ::c::link $outfile
     close $outfile
-}
-
-namespace eval c {
 }
