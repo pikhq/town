@@ -48,11 +48,10 @@ namespace eval build_helpers {
     }
 }
 namespace eval build {
-    namespace export program module in-directory uses c targets main
+    namespace export program module in-directory uses c targets option enable main
     namespace import ::build_helpers::*
 
     proc gen_space {name type commands} {
-	lappend ::build::possible_targets $name
 	namespace eval ::groups::$name set type $type
 	namespace eval ::groups::$name {
 	    set working_dir ..
@@ -77,6 +76,7 @@ namespace eval build {
     }
     
     proc program {name commands} {
+	lappend ::build::possible_targets $name
 	gen_space $name program $commands
     }
     
@@ -128,21 +128,25 @@ namespace eval build {
 	}
 
 	proc generate {outfile} {
-	    foreach x $::build::do_targets {
-		foreach y {csources cflags cc cppflags} {
-		    set $y [::groups::${x}::flag_read $y]
+	    foreach x $::build::targets {
+		if {[::build::enable get $x]} {
+		    foreach y {csources cflags cc cppflags} {
+			set $y [::groups::${x}::flag_read $y]
+		    }
+		    puts $outfile ": foreach $csources |> ^ CC %f^ $cc $cflags $cppflags -c %f -o %o|> ${x}_%B.o {${x}-objs}"
 		}
-		puts $outfile ": foreach $csources |> ^ CC %f^ $cc $cflags $cppflags -c %f -o %o|> ${x}_%B.o {${x}-objs}"
 	    }
 	}
 	
 	proc link {outfile} {
-	    foreach x $::build::do_targets {
-		if {[::groups::${x}::flag_read linkwith] == "c"} {
-		    foreach y {cc cflags libs} {
-			set $y [::groups::${x}::flag_read $y]
+	    foreach x $::build::targets {
+		if {[::build::enable get $x]} {
+		    if {[::groups::${x}::flag_read linkwith] == "c"} {
+			foreach y {cc cflags libs} {
+			    set $y [::groups::${x}::flag_read $y]
+			}
+			puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
 		    }
-		    puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
 		}
 	    }
 	}
@@ -154,29 +158,140 @@ namespace eval build {
 	namespace export are default
 	proc are {args} {
 	    foreach x $args {
+		::build::enable add $x
 		lappend ::build::targets $x
 	    }
 	}
 
 	proc default {args} {
 	    foreach x $args {
-		lappend ::build::defaults $x
+		::build::enable default $x
 	    }
 	}
 	namespace ensemble create
     }
 
-
-
-    proc main {} {
-	set outfile [open objs/Tupfile w]
-	if {[info exists ::build::defaults]} {
-	    set ::build::do_targets $::build::defaults
-	} else {
-	    set ::build::do_targets $::build::possible_targets
+    namespace eval enable {
+	namespace export add get default
+	proc add {x} {
+	    set ::build::enable($x) 0
 	}
-	foreach x $::build::do_targets {
-	    ::groups::${x}::do
+	proc get {x} {
+	    return [set ::build::enable($x)]
+	}
+	proc default {x} {
+	    if {[info exists ::build::enable($x)]} {
+		set ::build::enable($x) 1
+	    } else {
+		error "No such enable argument $x."
+	    }
+	}
+	namespace ensemble create
+    }
+
+    namespace eval option {
+	namespace export add get default
+	proc add {name args} {
+	    set ::build::options($name) {}
+	    if {[llength $args] != 0} {
+		set ::build::options_args($name) $args
+	    }
+	}
+	proc get {name} {
+	    return [set ::build::options($name)]
+	}
+	proc default {name x} {
+	    set ::build::options($name) $x
+	}
+    }
+
+    namespace eval invalid_arg {
+	namespace export enable disable choice option
+	proc enable {arg} {
+	    puts stderr "Invalid argument --enable-$arg."
+	    puts stderr "Choices are: "
+	    foreach x [array get ::build::enable] {
+		puts stderr "\t--enable-[lindex $x 0]"
+	    }
+	    exit 1
+	}
+
+	proc disable {arg} {
+	    puts stderr "Invalid argument --enable-$arg."
+	    puts stderr "Choices are:"
+	    foreach x [array get ::build::enable] {
+		puts stderr "\t--disable-[lindex $x 0]"
+	    }
+	    exit 1
+	}
+
+	proc choices {arg setting} {
+	    puts stderr "Invalid setting for argument --$arg."
+	    puts stderr "Choices are:"
+	    foreach x [array get ::build::options_args] {
+		puts stderr "\t--$arg=[lindex $x 0]"
+	    }
+	    exit 1
+	}
+
+	proc option {arg} {
+	    puts stderr "Invalid argument --$arg."
+	    puts stderr "Choices are:"
+	    foreach x [array get ::build::options] {
+		puts stderr "\t--$arg"
+	    }
+	    exit 1
+	}
+	namespace ensemble create
+    }
+
+    proc main {argv} {
+	if {![info exists ::build::targets]} {
+	    if {![info exists ::build::possible_targets]} {
+		return 0
+	    }
+	    targets are {*}$::build::possible_targets
+	    targets default {*}$::build::possible_targets
+	}
+	foreach x $argv {
+	    switch -regexp -matchvar matches -- $x {
+		{--enable-(.*)} {
+		    if {[info exists ::build::enable([lindex $matches 1])]} {
+			set ::build::enable([lindex $matches 1]) 1
+		    } else {
+			invalid_arg enable [lindex $matches 1]
+		    }
+		}
+		{--disable-(.*)} {
+		    if {[info exists ::build::enable([lindex $matches 1])]} {
+			set ::build::enable([lindex $matches 1]) 0
+		    } else {
+			invalid_arg disable [lindex $matches 1]
+		    }
+		}
+		{--([^=]*)=(.*)} {
+		    if {[info exists ::build::options([lindex $matches 1])]} {
+			if {[info exists ::build::options_args([lindex $matches 1])]} {
+			    if {[lsearch $::build::options_args([lindex $matches 1]) [lindex $matches 3]]} {
+				set ::build::options([lindex $matches 1]) [lindex $matches 3]
+			    } else {
+				invalid_arg choice [lindex $matches 1] [lindex $matches 3]
+			    }
+			} else {
+			    set ::build::options([lindex $matches 1]) [lindex $matches 3]
+			}
+		    } else {
+			invalid_arg option [lindex $matches 1]
+		    }
+		}
+	    }
+	}
+
+	set outfile [open objs/Tupfile w]
+	foreach x $::build::targets {
+	    if {[enable get $x]} {
+		::groups::${x}::do
+	    }
 	}
 	::build::c::generate $outfile
 	::build::c::link $outfile
