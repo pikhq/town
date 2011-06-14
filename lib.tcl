@@ -217,10 +217,10 @@ namespace eval build {
 	}
 
 	proc disable {arg} {
-	    puts stderr "Invalid argument --enable-$arg."
+	    puts stderr "Invalid argument --disable-$arg."
 	    puts stderr "Choices are:"
-	    foreach x [array get ::build::enable] {
-		puts stderr "\t--disable-[lindex $x 0]"
+	    foreach x [array names ::build::enable] {
+		puts stderr "\t--disable-$x"
 	    }
 	    exit 1
 	}
@@ -228,17 +228,24 @@ namespace eval build {
 	proc choices {arg setting} {
 	    puts stderr "Invalid setting for argument --$arg."
 	    puts stderr "Choices are:"
-	    foreach x [array get ::build::options_args] {
-		puts stderr "\t--$arg=[lindex $x 0]"
+	    foreach x [array names ::build::options_args] {
+		puts stderr "\t--$arg=$x"
 	    }
 	    exit 1
 	}
 
 	proc option {arg} {
-	    puts stderr "Invalid argument --$arg."
+	    puts stderr "Invalid argument $arg."
 	    puts stderr "Choices are:"
-	    foreach x [array get ::build::options] {
-		puts stderr "\t--$arg"
+	    foreach x [array names ::build::options] {
+		if {[info exists ::build::options_args($x)]} {
+		    puts stderr "\t--${x}=[join $::build::options_args($x) {, }]"
+		} else {
+		    puts stderr "\t--$x"
+		}
+	    }
+	    foreach x [array names ::build::enable] {
+		puts stderr "\t--enable-$x --disable-$x"
 	    }
 	    exit 1
 	}
@@ -281,8 +288,11 @@ namespace eval build {
 			    set ::build::options([lindex $matches 1]) [lindex $matches 3]
 			}
 		    } else {
-			invalid_arg option [lindex $matches 1]
+			invalid_arg option "--[lindex $matches 1]"
 		    }
+		}
+		default {
+		    invalid_arg option $x
 		}
 	    }
 	}
