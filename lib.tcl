@@ -1,22 +1,24 @@
 namespace eval groups {}
 namespace eval build {}
 
-proc program {name commands} {
+proc gen_space {name type commands} {
     lappend ::build::possible_targets $name
+    namespace eval ::groups::$name set type $type
     namespace eval ::groups::$name {
-	set type programs
 	set working_dir ..
+	proc flag_set {flag val} {variable $flag;set $flag $val}
+	proc flag_read {flag} {variable $flag;if {![info exists $flag]} {return ""} else {return set $flag}}
+	proc flag_append {flag val} {variable $flag;lappend $flag $val}
     }
     proc ::groups::${name}::do {} $commands
 }
 
+proc program {name commands} {
+    gen_space $name program $commands
+}
+
 proc module {name commands} {
-    lappend ::build::possible_targets $name
-    namespace eval ::groups::$name {
-	set type module
-	set working_dir ..
-    }
-    proc ::groups::${name}:: do {} $commands
+    gen_space $name module $commands
 }
 
 proc in-directory {dir args} {
@@ -74,12 +76,15 @@ proc solvewith_map {solver name} {
     uplevel namespace export $name
 }
 
+proc current {} {
+    return [uplevel 2 namespace current]
+}
+
 namespace eval c {
     namespace export define libs test needs sources
     proc define {args} {
-	set space [uplevel namespace current]
 	foreach x $args {
-	    lappend ${space}::cppflags -D$x
+	    [current]::flag_append cppflags -D$x
 	}
     }
 
@@ -91,26 +96,30 @@ namespace eval c {
 
     proc sources {args} {
 	set space [uplevel namespace current]
-	if {[set ${space}::type] != "modules" && ![info exists ${space}::linkwith]} {
-	    set ${space}::linkwith c
+	if {[[current]::flag_read type] != "modules" && ![info exists [current]::linkwith]} {
+	    [current]::flag_set linkwith c
 	}
 	foreach x $args {
-	    lappend ${space}::csources [set ${space}::working_dir]/$x
+	    [current]::flag_append csources [[current]::flag_read working_dir]/$x
 	}
     }
 
     proc generate {outfile} {
 	foreach x $::build::do_targets {
-	    namespace upvar ::groups::${x} csources csources cflags cflags cc cc cppflags cppflags
-	    puts $outfile ": foreach $csources |> ^ CC %f^ $cc [readvar cflags] [readvar cppflags]-c %f -o %o|> ${x}_%B.o {${x}-objs}"
+	    foreach y {csources cflags cc cppflags} {
+		set $y [::groups::${x}::flag_read $y]
+	    }
+	    puts $outfile ": foreach $csources |> ^ CC %f^ $cc $cflags $cppflags -c %f -o %o|> ${x}_%B.o {${x}-objs}"
 	}
     }
 
     proc link {outfile} {
 	foreach x $::build::do_targets {
-	    if {[readvar ::groups::${x}::linkwith] == "c"} {
-		namespace upvar ::groups::${x} cflags cflags cc cc libs libs
-		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc [readvar cflags] %f [readvar libs] -o %o |> $x"
+	    if {[::groups::${x}::flag_read linkwith] == "c"} {
+		foreach y {cc cflags libs} {
+		    set y [::groups::${x}::flag_read $y]
+		}
+		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
 	    }
 	}
     }
@@ -134,36 +143,22 @@ namespace eval targets {
     namespace ensemble create
 }
 
-proc readvar {v} {
-    if {[uplevel info exists $v]} {
-	return [uplevel set $v]
-    } else {
-	return ""
-    }
-}
-
 solution libs {libname} {
     puts -nonewline stderr "Testing for $libname with pkg-config...   "
     if {![catch {exec pkg-config --exists $libname}]} {
 	puts yes
 	solved "libs $libname" [concat "set libname $libname;" {
-	    set space [uplevel namespace current]
-	    lappend ${space}::cflags [exec pkg-config --cflags $libname]
-	    lappend ${space}::libs [exec pkg-config --libs $libname]}]
+	    [current]::flag_append cflags [exec pkg-config --cflags $libname]
+	    [current]::flag_append libs [exec pkg-config --libs $libname]}]
     } else {
 	puts no
     }
-    solved "libs $libname" [concat "set libname $libname;" {
-	set space [uplevel namespace current]
-	lappend ${space}::libs -lgc}]
+    solved "libs $libname" [concat "set libname $libname;" {[current]::flag_append libs -l$libname}]
 }
 
 solution ::c::c99 {} {
     puts stderr "Testing for c99...   Making a stupid assumption."
-    solved ::c::c99 {
-	set space [uplevel namespace current]
-	set ${space}::cc "gcc -std=c99"
-    }
+    solved ::c::c99 {[current]::flag_set cc "gcc -std=c99"}
 }
 
 proc main {} {
