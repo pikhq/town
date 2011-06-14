@@ -123,16 +123,52 @@ namespace eval build {
 	    foreach x $::build::do_targets {
 		if {[::groups::${x}::flag_read linkwith] == "c"} {
 		    foreach y {cc cflags libs} {
-			set y [::groups::${x}::flag_read $y]
+			set $y [::groups::${x}::flag_read $y]
 		    }
 		    puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
+		} else {
+		    puts "::groups::${x} links with [set ::groups::${x}::linkwith]"
 		}
 	    }
 	}
 
+	proc testbuild {cc cflags libs source} {
+	    set file [open tmp.c "w"]
+	    puts $file $source
+	    close $file
+	    set ret 1
+	    if {![catch {exec $cc $cflags tmp.c $libs}]} {
+		set ret 0
+	    } else {
+		if {![catch {exec ./a.out}]} {
+		    set ret 0
+		}
+	    }
+	    file delete a.out tmp.c
+	    return $ret
+	}
+
+	proc generate_csource {headers prelude main} {
+	    return [concat $headers "\n" $prelude "\n" "int main() {\n" $main "}\n"]
+	}
+
+	proc generate_define_test {headers prelude test} {
+	    generate_csource $headers $prelude "#if $test\nreturn 0;\n#else\nreturn 1;\n#endif"
+	}
+
 	solution c99 {} {
-	    puts stderr "Testing for c99...   Making a stupid assumption."
-	    solved c99 {[current]::flag_set cc "gcc -std=c99"}
+	    puts -nonewline stderr "Testing for c99...   "
+	    foreach x [concat $::env(CC) "$::env(CC) -std=c99" gcc "gcc -std=c99" cc "cc -std=c99"] {
+		if {[testbuild $x {} {} [generate_define_test {} {} "defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L"]]} {
+		    puts stderr "yes; $x"
+		    solved c99 [concat {[current]::flag_set cc} $x]
+		    return
+		}
+	    }
+	    puts stderr "no"
+	    puts stderr "WARNING: could not find a compiler that claims to be C99." 
+	    puts stderr "Using \$CC, but it probably won't work."
+	    solved c99 {[current]::flag_set cc $::env(CC)}
 	}
 	
 	namespace ensemble create
