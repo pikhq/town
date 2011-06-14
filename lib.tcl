@@ -7,8 +7,11 @@ namespace eval build_helpers {
 	global solvers
 	for {set i [expr {[llength $args]-1}]} {$i >= 0} {incr i -1} {
 	    if {[info exists solvers([lrange $args 0 $i])]} {
-		uplevel $solvers([lrange $args 0 $i]) [lrange $args [expr {$i+1}] end]
-		return
+		foreach x $solvers([lrange $args 0 $i]) {
+		    if {[uplevel $solvers([lrange $args 0 $i]) [lrange $args [expr {$i+1}] end]]} {
+			return
+		    }
+		}
 	    }
 	}
 	puts stderr [array get solvers]
@@ -16,17 +19,17 @@ namespace eval build_helpers {
 	exit 1
     }
     
-    proc solution {name arg commands} {
+    proc solution {solver name arg commands} {
 	global solvers
 	uplevel [list proc $name $arg $commands]
-	set solvers($name) [uplevel namespace which $name]
+	lappend solvers($solver) [uplevel namespace which $name]
     }
     
     proc solved {name commands} {
 	global solvers
 	uplevel $commands
 	set solvers($name) [list apply [list {} $commands]]
-	uplevel return
+	uplevel "return 1"
     }
     
     proc solvewith {solver name} {
@@ -52,9 +55,22 @@ namespace eval build {
 	namespace eval ::groups::$name set type $type
 	namespace eval ::groups::$name {
 	    set working_dir ..
-	    proc flag_set {flag val} {variable $flag;set $flag $val}
-	    proc flag_read {flag} {variable $flag;if {![info exists $flag]} {return ""} else {return set $flag}}
-	    proc flag_append {flag val} {variable $flag;lappend $flag $val}
+	    proc flag_set {flag val} {
+		variable $flag
+		set $flag $val
+	    }
+	    proc flag_read {flag} {
+		variable $flag
+		if {![info exists $flag]} {
+		    return ""
+		} else {
+		    return [set $flag]
+		}
+	    }
+	    proc flag_append {flag val} {
+		variable $flag
+		lappend $flag $val
+	    }
 	}
 	proc ::groups::${name}::do {} $commands
     }
@@ -126,8 +142,6 @@ namespace eval build {
 			set $y [::groups::${x}::flag_read $y]
 		    }
 		    puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
-		} else {
-		    puts "::groups::${x} links with [set ::groups::${x}::linkwith]"
 		}
 	    }
 	}
@@ -156,21 +170,22 @@ namespace eval build {
 	    generate_csource $headers $prelude "#if $test\nreturn 0;\n#else\nreturn 1;\n#endif"
 	}
 
-	solution c99 {} {
+	solution c99 c99_compile {} {
 	    puts -nonewline stderr "Testing for c99...   "
 	    foreach x [concat $::env(CC) "$::env(CC) -std=c99" gcc "gcc -std=c99" cc "cc -std=c99"] {
 		if {[testbuild $x {} {} [generate_define_test {} {} "defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L"]]} {
 		    puts stderr "yes; $x"
 		    solved c99 [concat {[current]::flag_set cc} $x]
-		    return
+		    return 1
 		}
 	    }
 	    puts stderr "no"
 	    puts stderr "WARNING: could not find a compiler that claims to be C99." 
 	    puts stderr "Using \$CC, but it probably won't work."
 	    solved c99 {[current]::flag_set cc $::env(CC)}
+	    return 1
 	}
-	
+
 	namespace ensemble create
     }
 
@@ -190,19 +205,20 @@ namespace eval build {
 	namespace ensemble create
     }
 
-    solution libs {libname} {
+    solution libs libs_default {libname} {
 	puts -nonewline stderr "Testing for $libname with pkg-config...   "
 	if {![catch {exec pkg-config --exists $libname}]} {
 	    puts yes
 	    solved "libs $libname" [concat "set libname $libname;" {
 		[current]::flag_append cflags [exec pkg-config --cflags $libname]
 		[current]::flag_append libs [exec pkg-config --libs $libname]}]
+	    return 1
 	} else {
 	    puts no
 	}
 	solved "libs $libname" [concat "set libname $libname;" {[current]::flag_append libs -l$libname}]
+	return 1
     }
-    
     
     proc main {} {
 	set outfile [open objs/Tupfile w]
