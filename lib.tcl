@@ -37,6 +37,43 @@ proc uses {args} {
     }
 }
 
+array set solvers {}
+proc solve {args} {
+    global solvers
+    for {set i [expr {[llength $args]-1}]} {$i >= 0} {incr i -1} {
+	if {[info exists solvers([lrange $args 0 $i])]} {
+	    uplevel $solvers([lrange $args 0 $i]) [lrange $args [expr {$i+1}] end]
+	    return
+	}
+    }
+    puts stderr [array get solvers]
+    puts stderr "Could not find solver for $args."
+    exit 1
+}
+
+proc solution {name arg commands} {
+    global solvers
+    uplevel [list proc $name $arg $commands]
+    set solvers($name) [uplevel namespace which $name]
+}
+
+proc solved {name commands} {
+    global solvers
+    uplevel $commands
+    set solvers($name) [list apply [list {} $commands]]
+    uplevel return
+}
+
+proc solvewith {solver name} {
+    uplevel "proc $name {args} {uplevel solve $solver \$args}"
+    uplevel namespace export $name
+}
+
+proc solvewith_map {solver name} {
+    uplevel "proc $name {args} {foreach x \$args {uplevel solve $solver \$x}}"
+    uplevel namespace export $name
+}
+
 namespace eval c {
     namespace export define libs test needs sources
     proc define {args} {
@@ -46,42 +83,9 @@ namespace eval c {
 	}
     }
 
-    namespace eval test {
-	namespace export pkg-config
-	proc pkg-config {x if else} {
-	    puts -nonewline stderr "Testing for $x with pkg-config...   "
-	    if {![catch {exec pkg-config --exists $x}]} {
-		puts yes
-		uplevel $if
-	    } else {
-		puts no
-		uplevel $else
-	    }
-	}
-	namespace ensemble create
-    }
-
     namespace eval needs {
-	namespace export c99 libs
-	proc c99 {} {
-	    set space [uplevel namespace current]
-	    lappend ${space}::cflags -std=c99
-	}
-
-	proc libs {args} {
-	    set space [uplevel namespace current]
-	    foreach x $args {
-		if {[info commands ::c::needs::lib_$x] != ""} {
-		    return [uplevel c needs lib_$x]
-		}
-		c test pkg-config $x {
-		    lappend ${space}::libs [exec pkg-config --libs $x]
-		    lappend ${space}::cflags [exec pkg-config --cflags $x]
-		} {
-		    lappend ${space}::libs -l$x
-		}
-	    }
-	}
+	solvewith ::c::c99 c99
+	solvewith_map libs libs
 	namespace ensemble create
     }
 
@@ -97,16 +101,16 @@ namespace eval c {
 
     proc generate {outfile} {
 	foreach x $::build::do_targets {
-	    namespace upvar ::groups::${x} csources csources cflags cflags cppflags cppflags
-	    puts $outfile ": foreach $csources |> ^ CC %f^ gcc [readvar cflags] [readvar cppflags]-c %f -o %o|> ${x}_%B.o {${x}-objs}"
+	    namespace upvar ::groups::${x} csources csources cflags cflags cc cc cppflags cppflags
+	    puts $outfile ": foreach $csources |> ^ CC %f^ $cc [readvar cflags] [readvar cppflags]-c %f -o %o|> ${x}_%B.o {${x}-objs}"
 	}
     }
 
     proc link {outfile} {
 	foreach x $::build::do_targets {
 	    if {[readvar ::groups::${x}::linkwith] == "c"} {
-		namespace upvar ::groups::${x} cflags cflags libs libs
-		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ gcc [readvar cflags] %f [readvar libs] -o %o |> $x"
+		namespace upvar ::groups::${x} cflags cflags cc cc libs libs
+		puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc [readvar cflags] %f [readvar libs] -o %o |> $x"
 	    }
 	}
     }
@@ -135,6 +139,30 @@ proc readvar {v} {
 	return [uplevel set $v]
     } else {
 	return ""
+    }
+}
+
+solution libs {libname} {
+    puts -nonewline stderr "Testing for $libname with pkg-config...   "
+    if {![catch {exec pkg-config --exists $libname}]} {
+	puts yes
+	solved "libs $libname" [concat "set libname $libname;" {
+	    set space [uplevel namespace current]
+	    lappend ${space}::cflags [exec pkg-config --cflags $libname]
+	    lappend ${space}::libs [exec pkg-config --libs $libname]}]
+    } else {
+	puts no
+    }
+    solved "libs $libname" [concat "set libname $libname;" {
+	set space [uplevel namespace current]
+	lappend ${space}::libs -lgc}]
+}
+
+solution ::c::c99 {} {
+    puts stderr "Testing for c99...   Making a stupid assumption."
+    solved ::c::c99 {
+	set space [uplevel namespace current]
+	set ${space}::cc "gcc -std=c99"
     }
 }
 
