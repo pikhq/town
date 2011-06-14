@@ -5,16 +5,16 @@ namespace eval build_helpers {
     
     proc solve {args} {
 	global solvers
+	puts -nonewline stderr "Testing for $args...\t"
 	for {set i [expr {[llength $args]-1}]} {$i >= 0} {incr i -1} {
 	    if {[info exists solvers([lrange $args 0 $i])]} {
 		foreach x $solvers([lrange $args 0 $i]) {
-		    if {[uplevel $solvers([lrange $args 0 $i]) [lrange $args [expr {$i+1}] end]]} {
+		    if {[uplevel $x [lrange $args [expr {$i+1}] end]]} {
 			return
 		    }
 		}
 	    }
 	}
-	puts stderr [array get solvers]
 	puts stderr "Could not find solver for $args."
 	exit 1
     }
@@ -22,7 +22,8 @@ namespace eval build_helpers {
     proc solution {solver name arg commands} {
 	global solvers
 	uplevel [list proc $name $arg $commands]
-	lappend solvers($solver) [uplevel namespace which $name]
+	lappend solvers($solver)
+	set solvers($solver) [linsert $solvers($solver) 0 [uplevel namespace which $name]]
     }
     
     proc solved {name commands} {
@@ -146,46 +147,6 @@ namespace eval build {
 	    }
 	}
 
-	proc testbuild {cc cflags libs source} {
-	    set file [open tmp.c "w"]
-	    puts $file $source
-	    close $file
-	    set ret 1
-	    if {![catch {exec $cc $cflags tmp.c $libs}]} {
-		set ret 0
-	    } else {
-		if {![catch {exec ./a.out}]} {
-		    set ret 0
-		}
-	    }
-	    file delete a.out tmp.c
-	    return $ret
-	}
-
-	proc generate_csource {headers prelude main} {
-	    return [concat $headers "\n" $prelude "\n" "int main() {\n" $main "}\n"]
-	}
-
-	proc generate_define_test {headers prelude test} {
-	    generate_csource $headers $prelude "#if $test\nreturn 0;\n#else\nreturn 1;\n#endif"
-	}
-
-	solution c99 c99_compile {} {
-	    puts -nonewline stderr "Testing for c99...   "
-	    foreach x [concat $::env(CC) "$::env(CC) -std=c99" gcc "gcc -std=c99" cc "cc -std=c99"] {
-		if {[testbuild $x {} {} [generate_define_test {} {} "defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L"]]} {
-		    puts stderr "yes; $x"
-		    solved c99 [concat {[current]::flag_set cc} $x]
-		    return 1
-		}
-	    }
-	    puts stderr "no"
-	    puts stderr "WARNING: could not find a compiler that claims to be C99." 
-	    puts stderr "Using \$CC, but it probably won't work."
-	    solved c99 {[current]::flag_set cc $::env(CC)}
-	    return 1
-	}
-
 	namespace ensemble create
     }
 
@@ -205,21 +166,8 @@ namespace eval build {
 	namespace ensemble create
     }
 
-    solution libs libs_default {libname} {
-	puts -nonewline stderr "Testing for $libname with pkg-config...   "
-	if {![catch {exec pkg-config --exists $libname}]} {
-	    puts yes
-	    solved "libs $libname" [concat "set libname $libname;" {
-		[current]::flag_append cflags [exec pkg-config --cflags $libname]
-		[current]::flag_append libs [exec pkg-config --libs $libname]}]
-	    return 1
-	} else {
-	    puts no
-	}
-	solved "libs $libname" [concat "set libname $libname;" {[current]::flag_append libs -l$libname}]
-	return 1
-    }
-    
+
+
     proc main {} {
 	set outfile [open objs/Tupfile w]
 	if {[info exists ::build::defaults]} {
@@ -235,5 +183,7 @@ namespace eval build {
 	close $outfile
     }
 }
+
+source tests.tcl
 
 namespace import ::build::*
