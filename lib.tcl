@@ -129,7 +129,7 @@ namespace eval build {
 
 	proc generate {outfile} {
 	    foreach x $::build::targets {
-		if {[::build::enable get $x]} {
+		if {[::build::enable get $x] && [::groups::${x}::flag_read csources] != ""} {
 		    foreach y {csources cflags cc cppflags} {
 			set $y [::groups::${x}::flag_read $y]
 		    }
