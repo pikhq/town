@@ -52,6 +52,7 @@ namespace eval build {
     namespace import ::build_helpers::*
 
     proc gen_space {name type commands} {
+	lappend ::build::groups $name
 	namespace eval ::groups::$name set type $type
 	namespace eval ::groups::$name {
 	    set working_dir ..
@@ -128,7 +129,7 @@ namespace eval build {
 	}
 
 	proc generate {outfile} {
-	    foreach x $::build::targets {
+	    foreach x $::build::groups {
 		if {[::build::enable get $x] && [::groups::${x}::flag_read csources] != ""} {
 		    foreach y {csources cflags cc cppflags} {
 			set $y [::groups::${x}::flag_read $y]
@@ -139,7 +140,7 @@ namespace eval build {
 	}
 	
 	proc link {outfile} {
-	    foreach x $::build::targets {
+	    foreach x $::build::groups {
 		if {[::build::enable get $x]} {
 		    if {[::groups::${x}::flag_read linkwith] == "c"} {
 			foreach y {cc cflags libs} {
