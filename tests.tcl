@@ -8,10 +8,6 @@ namespace eval tests::c {
 	set ret 1
 	if {![catch {exec $cc $cflags tmp.c $libs}]} {
 	    set ret 0
-	} else {
-	    if {![catch {exec ./a.out}]} {
-		set ret 0
-	    }
 	}
 	file delete a.out tmp.c
 	return $ret
@@ -22,7 +18,7 @@ namespace eval tests::c {
     }
 
     proc generate_define_test {headers prelude test} {
-	generate_csource $headers $prelude "#if $test\nreturn 0;\n#else\nreturn 1;\n#endif"
+	generate_csource $headers $prelude "#if $test\n*/\n#else\nreturn 1;\n#endif"
     }
 
     proc test_stdcversion99 {cc} {
