@@ -29,17 +29,35 @@ namespace eval build_helpers {
     proc solved {name commands} {
 	global solvers
 	uplevel $commands
-	set solvers($name) [list apply [list {} $commands]]
-	uplevel "return 1"
+	set solvers($name) [list [list apply [list {} "namespace import ::build_helpers::*;$commands;puts stderr \"(cached)\";return 1"]]]
+	uplevel return 1
     }
     
     proc solvewith {solver name} {
-	uplevel "proc $name {args} {uplevel ::build_helpers::solve $solver \{*\}\$args}"
+	uplevel [concat "proc $name {args} {set solver $solver;" {
+	    if {[lindex $args 0] eq "-export"} {
+		set args [lrange $args 1 end]
+		append [current]::exports ";::build_helpers::solve $solver" {*}$args
+	    }
+	    uplevel ::build_helpers::solve $solver {*}$args
+	} "}"]
 	uplevel namespace export $name
     }
     
     proc solvewith_map {solver name} {
-	uplevel "proc $name {args} {foreach x \$args {uplevel ::build_helpers::solve $solver \$x}}"
+	uplevel [concat "proc $name {args} {set solver $solver;" {
+	    set export 0
+	    if {[lindex $args 0] eq "-export"} {
+		set args [lrange $args 1 end]
+		set export 1
+	    }
+	    foreach x $args {
+		if {$export} {
+		    append [current]::exports ";::build_helpers::solve $solver $x"
+		}
+		uplevel ::build_helpers::solve $solver $x
+	    }
+	} "}"]
 	uplevel namespace export $name
     }
     
@@ -52,8 +70,10 @@ namespace eval build {
     namespace import ::build_helpers::*
 
     proc gen_space {name type commands} {
+	set ::build::needed($name) 0
 	lappend ::build::groups $name
 	namespace eval ::groups::$name set type $type
+	namespace eval ::groups::$name set name $name
 	namespace eval ::groups::$name {
 	    set working_dir ..
 	    proc flag_set {flag val} {
@@ -99,6 +119,10 @@ namespace eval build {
     proc uses {args} {
 	foreach x $args {
 	    uplevel ::groups::${x}::do
+	    if {[info exists ::groups::${x}::exports]} {
+		uplevel [set ::groups::${x}::exports]
+	    }
+	    enable on $x
 	}
     }
 
@@ -107,8 +131,16 @@ namespace eval build {
 	namespace import ::build_helpers::*
 
 	proc define {args} {
+	    set export 0
+	    if {[lindex $args 0] eq "-export"} {
+		set export 1
+		set args [lrange $args 1 end]
+	    }
 	    foreach x $args {
 		[current]::flag_append cppflags -D$x
+		if {$export} {
+		    append [current]::exports ";\[namespace current\]::flag_append cppflags -D$x"
+		}
 	    }
 	}
 	
@@ -120,33 +152,43 @@ namespace eval build {
 	}
 	
 	proc sources {args} {
-	    if {[[current]::flag_read type] != "modules" && ![info exists [current]::linkwith]} {
+	    if {[[current]::flag_read type] != "module" && ![info exists [current]::linkwith]} {
 		[current]::flag_set linkwith c
+	    } else {
+		append [current]::exports {;
+		    if {[[namespace current]::flag_read type] != "module" && ![info exists [namespace current]::linkwith]} {
+			[namespace current]::flag_set linkwith c
+		    }
+		}
 	    }
 	    foreach x $args {
 		[current]::flag_append csources [[current]::flag_read working_dir]/$x
+		[current]::flag_append objs [[current]::flag_read name]_[regsub {\.c$} $x .o]
+		if {[[current]::flag_read type] eq "module"} {
+		    append [current]::exports ";\[namespace current\]::flag_append objs [[current]::flag_read name]_[regsub {\.c$} $x .o]"
+		}
 	    }
 	}
 
 	proc generate {outfile} {
 	    foreach x $::build::groups {
-		if {[::build::enable get $x] && [::groups::${x}::flag_read csources] != ""} {
+		if {$::build::needed($x) && [::groups::${x}::flag_read csources] != ""} {
 		    foreach y {csources cflags cc cppflags} {
 			set $y [::groups::${x}::flag_read $y]
 		    }
-		    puts $outfile ": foreach $csources |> ^ CC %f^ $cc $cflags $cppflags -c %f -o %o|> ${x}_%B.o {${x}-objs}"
+		    puts $outfile ": foreach $csources |> ^ CC %f^ $cc $cflags $cppflags -c %f -o %o|> ${x}_%B.o"
 		}
 	    }
 	}
 	
 	proc link {outfile} {
-	    foreach x $::build::groups {
+	    foreach x $::build::possible_targets {
 		if {[::build::enable get $x]} {
 		    if {[::groups::${x}::flag_read linkwith] == "c"} {
-			foreach y {cc cflags libs} {
+			foreach y {cc cflags libs objs} {
 			    set $y [::groups::${x}::flag_read $y]
 			}
-			puts $outfile ": {${x}-objs} |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
+			puts $outfile ": $objs |> ^ CCLD %o^ $cc $cflags %f $libs -o %o |> $x"
 		    }
 		}
 	    }
@@ -173,13 +215,29 @@ namespace eval build {
     }
 
     namespace eval enable {
-	namespace export add get default
+	namespace export on add get default
 	proc add {x} {
 	    set ::build::enable($x) 0
 	}
 	proc get {x} {
-	    return [set ::build::enable($x)]
+	    if {[info exists ::build::enable($x)]} {
+		return [set ::build::enable($x)]
+	    } else {
+		return ""
+	    }
 	}
+
+	proc on {x} {
+	    foreach y [::groups::${x}::flag_read requires] {
+		if {[get $y] == 0} {
+		    puts stderr "Warning: forcing target $y."
+		    set ::build::enable($x) 1
+		}
+		set ::build::needed($x) 1
+	    }
+	    set ::build::needed($x) 1
+	}
+
 	proc default {x} {
 	    if {[info exists ::build::enable($x)]} {
 		set ::build::enable($x) 1
@@ -302,6 +360,7 @@ namespace eval build {
 	foreach x $::build::targets {
 	    if {[enable get $x]} {
 		::groups::${x}::do
+		enable on $x
 	    }
 	}
 	::build::c::generate $outfile
